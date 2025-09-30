@@ -107,8 +107,6 @@ let usersCollection, tagsCollection, postsCollection, commentsCollection, announ
 
 async function run() {
     try {
-        await client.connect();
-        console.log("MongoDB connected successfully!");
 
         const db = client.db("myforum");
         usersCollection = db.collection("users");
@@ -358,7 +356,7 @@ async function run() {
             }
         });
 
-        app.post("/posts/:postId/vote", verifyToken, verifyUser, async (req, res) => {
+        app.post("/posts/:postId/vote", verifyToken, async (req, res) => {
             try {
                 const { postId } = req.params;
                 const { type } = req.body;
@@ -477,7 +475,7 @@ async function run() {
             }
         });
 
-        app.get("/posts/:id", verifyToken, verifyUser, async (req, res) => {
+        app.get("/posts/:id", verifyToken, async (req, res) => {
             try {
                 const { id } = req.params;
                 const post = await postsCollection.findOne({ _id: new ObjectId(id) });
@@ -489,7 +487,7 @@ async function run() {
         });
 
         // 🔹 DELETE /posts/:id
-        app.delete("/posts/:id", verifyToken, verifyUser, async (req, res) => {
+        app.delete("/posts/:id", verifyToken, async (req, res) => {
             const { id } = req.params;
             if (!ObjectId.isValid(id)) {
                 return res.status(400).json({ success: false, message: "Invalid post ID" });
@@ -684,7 +682,7 @@ async function run() {
         });
 
         // Assuming Express + MongoDB + verifyToken middleware
-        app.post("/posts/:id/vote", verifyToken, verifyUser, async (req, res) => {
+        app.post("/posts/:id/vote", verifyToken, async (req, res) => {
             const { type } = req.body;
             const { id } = req.params;
             const email = req.user.email;
@@ -763,15 +761,6 @@ async function run() {
             }
         });
 
-        // app.get("/posts/:id/comments", verifyToken, async (req, res) => {
-        //     const { id } = req.params;
-        //     try {
-        //         const comments = await commentsCollection.find({ postId: id }).sort({ createdAt: -1 }).toArray();
-        //         res.json(comments);
-        //     } catch (err) {
-        //         res.status(500).json({ message: "Failed to fetch comments" });
-        //     }
-        // });
 
         app.get("/posts/:id/comments", verifyToken, async (req, res) => {
             const { id } = req.params;

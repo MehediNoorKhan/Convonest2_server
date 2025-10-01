@@ -158,25 +158,25 @@ async function run() {
         });
 
         // Get users (all or by email)
-        // app.get("/users", async (req, res) => {
-        //     try {
-        //         const { email } = req.query;
-        //         let users;
+        app.get("/users", async (req, res) => {
+            try {
+                const { email } = req.query;
+                let users;
 
-        //         if (email) {
-        //             const user = await usersCollection.findOne({ email });
-        //             if (!user) return res.status(404).json({ success: false, message: "User not found" });
-        //             users = [user];
-        //         } else {
-        //             users = await usersCollection.find({}).toArray();
-        //         }
+                if (email) {
+                    const user = await usersCollection.findOne({ email });
+                    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+                    users = [user];
+                } else {
+                    users = await usersCollection.find({}).toArray();
+                }
 
-        //         res.json({ success: true, data: users });
-        //     } catch (err) {
-        //         console.error(err);
-        //         res.status(500).json({ success: false, message: "Server error" });
-        //     }
-        // });
+                res.json({ success: true, data: users });
+            } catch (err) {
+                console.error(err);
+                res.status(500).json({ success: false, message: "Server error" });
+            }
+        });
 
         // Update user's About Me
         app.put("/users/aboutme", verifyToken, verifyUser, async (req, res) => {
@@ -235,20 +235,20 @@ async function run() {
         });
 
         // Promote user to admin
-        app.patch("/users/make-admin/:id", verifyToken, verifyAdmin, async (req, res) => {
-            const { id } = req.params;
-            if (!ObjectId.isValid(id)) return res.status(400).json({ success: false, message: "Invalid user ID" });
+        // app.patch("/users/make-admin/:id", verifyToken, verifyAdmin, async (req, res) => {
+        //     const { id } = req.params;
+        //     if (!ObjectId.isValid(id)) return res.status(400).json({ success: false, message: "Invalid user ID" });
 
-            try {
-                const result = await usersCollection.updateOne({ _id: new ObjectId(id) }, { $set: { role: "admin" } });
-                if (!result.modifiedCount) return res.status(404).json({ success: false, message: "User not found" });
+        //     try {
+        //         const result = await usersCollection.updateOne({ _id: new ObjectId(id) }, { $set: { role: "admin" } });
+        //         if (!result.modifiedCount) return res.status(404).json({ success: false, message: "User not found" });
 
-                res.json({ success: true, message: "User role updated" });
-            } catch (err) {
-                console.error(err);
-                res.status(500).json({ success: false, message: "Server error" });
-            }
-        });
+        //         res.json({ success: true, message: "User role updated" });
+        //     } catch (err) {
+        //         console.error(err);
+        //         res.status(500).json({ success: false, message: "Server error" });
+        //     }
+        // });
 
         // ------------------- Tags -------------------
         const defaultTags = ["fix", "solve", "bug", "code", "problem", "quick", "crash", "stack", "beautiful", "efficient", "confusing", "branch", "live"];

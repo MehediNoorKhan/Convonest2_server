@@ -118,7 +118,6 @@ async function run() {
 
         app.get("/", (req, res) => res.send("Backend is running!"));
 
-
         app.post("/jwt", async (req, res) => {
             const { email } = req.body;
             const user = await usersCollection.findOne({ email });
@@ -174,7 +173,6 @@ async function run() {
             }
         });
 
-
         // GET /users
         app.get("/users", async (req, res) => {
             try {
@@ -193,7 +191,6 @@ async function run() {
                 const email = req.user?.email?.toLowerCase();
 
                 console.log('email:', email);
-
 
                 const result = await usersCollection.findOneAndUpdate(
                     { email },
@@ -259,7 +256,6 @@ async function run() {
             }
         });
 
-
         // PATCH /users/make-admin/:id
         app.patch("/users/make-admin/:id", verifyToken, verifyAdmin, async (req, res) => {
             const { id } = req.params;
@@ -288,7 +284,6 @@ async function run() {
             const allTags = await tagsCollection.find().toArray();
             res.json(allTags);
         });
-
 
         app.post("/posts", verifyToken, verifyUser, async (req, res) => {
             try {
@@ -761,7 +756,6 @@ async function run() {
             }
         });
 
-
         app.get("/posts/:id/comments", verifyToken, async (req, res) => {
             const { id } = req.params;
             // Get page and limit from query, default: page 1, limit 5
@@ -786,7 +780,6 @@ async function run() {
                 res.status(500).json({ message: "Failed to fetch comments" });
             }
         });
-
 
         // Only authenticated users can add an announcement
         app.post("/announcements", verifyToken, verifyAdmin, async (req, res) => {
@@ -915,7 +908,6 @@ async function run() {
                 });
             }
         });
-
 
         app.get("/users/role/:email", verifyToken, async (req, res) => {
             console.log("=== ROLE ROUTE DEBUG ===");
@@ -1097,7 +1089,6 @@ async function run() {
             }
         });
 
-
         // ✅ Store payment result
         app.post("/save-payment", verifyToken, async (req, res) => {
             try {
@@ -1135,7 +1126,6 @@ async function run() {
                 res.status(500).json({ message: "Failed to save payment", error: error.message });
             }
         });
-
 
         // Get posts count
         app.get("/api/posts/count", async (req, res) => {
@@ -1192,7 +1182,6 @@ async function run() {
 
 
 
-
     } catch (err) {
         console.error("MongoDB connection failed:", err);
     }
@@ -1203,3 +1192,4 @@ run().catch(console.dir);
 app.listen(port, () => {
     console.log(`Server running on http://localhost:${port}`);
 });
+

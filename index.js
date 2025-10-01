@@ -863,8 +863,7 @@ async function run() {
             }
         });
 
-        // GET user info by email
-        // Get user profile and their recent posts
+        // Get user profile and their recent posts by his email
         app.get("/users/profile", verifyToken, verifyUser, async (req, res) => {
 
 
@@ -890,7 +889,7 @@ async function run() {
 
 
                 if (user) {
-                    console.log("   User details:", {
+                    console.log("User details:", {
                         _id: user._id,
                         fullName: user.fullName,
                         email: user.email,
@@ -966,7 +965,7 @@ async function run() {
                 res.json({ role: user.role });
 
             } catch (error) {
-                console.error("❌ Role route error:", error);
+                console.error(" Role route error:", error);
                 res.status(500).json({ message: "Server error", error: error.message });
             }
         });

@@ -235,20 +235,20 @@ async function run() {
         });
 
         // Promote user to admin
-        // app.patch("/users/make-admin/:id", verifyToken, verifyAdmin, async (req, res) => {
-        //     const { id } = req.params;
-        //     if (!ObjectId.isValid(id)) return res.status(400).json({ success: false, message: "Invalid user ID" });
+        app.patch("/users/make-admin/:id", verifyToken, verifyAdmin, async (req, res) => {
+            const { id } = req.params;
+            if (!ObjectId.isValid(id)) return res.status(400).json({ success: false, message: "Invalid user ID" });
 
-        //     try {
-        //         const result = await usersCollection.updateOne({ _id: new ObjectId(id) }, { $set: { role: "admin" } });
-        //         if (!result.modifiedCount) return res.status(404).json({ success: false, message: "User not found" });
+            try {
+                const result = await usersCollection.updateOne({ _id: new ObjectId(id) }, { $set: { role: "admin" } });
+                if (!result.modifiedCount) return res.status(404).json({ success: false, message: "User not found" });
 
-        //         res.json({ success: true, message: "User role updated" });
-        //     } catch (err) {
-        //         console.error(err);
-        //         res.status(500).json({ success: false, message: "Server error" });
-        //     }
-        // });
+                res.json({ success: true, message: "User role updated" });
+            } catch (err) {
+                console.error(err);
+                res.status(500).json({ success: false, message: "Server error" });
+            }
+        });
 
         // ------------------- Tags -------------------
         const defaultTags = ["fix", "solve", "bug", "code", "problem", "quick", "crash", "stack", "beautiful", "efficient", "confusing", "branch", "live"];
@@ -429,15 +429,15 @@ async function run() {
         });
 
         // ------------------- Announcements -------------------
-        app.get("/announcements", async (req, res) => {
-            try {
-                const announcements = await announcementsCollection.find().sort({ createdAt: -1 }).toArray();
-                res.json(announcements);
-            } catch (err) {
-                console.error(err);
-                res.status(500).json({ message: "Failed to fetch announcements" });
-            }
-        });
+        // app.get("/announcements", async (req, res) => {
+        //     try {
+        //         const announcements = await announcementsCollection.find().sort({ createdAt: -1 }).toArray();
+        //         res.json(announcements);
+        //     } catch (err) {
+        //         console.error(err);
+        //         res.status(500).json({ message: "Failed to fetch announcements" });
+        //     }
+        // });
 
         app.post("/announcements", verifyToken, verifyAdmin, async (req, res) => {
             try {

@@ -1,25 +1,26 @@
+import dotenv from "dotenv";
+dotenv.config();
+
 import express from "express";
 import Stripe from "stripe";
 import jwt from "jsonwebtoken";
 import cors from "cors";
-import dotenv from "dotenv";
+import admin from "firebase-admin";
 import { MongoClient, ServerApiVersion, ObjectId } from "mongodb";
-
-dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 5000;
+
+
 
 app.use(cors());
 app.use(express.json());
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-import admin from "firebase-admin";
-import fs from "fs";
 
-const serviceAccount = JSON.parse(
-    fs.readFileSync("./serviceAccountKey.json", "utf8")
-);
+const decodedKey = Buffer.from(process.env.FB_SERVICE_KEY, 'base64').toString('utf8');
+const serviceAccount = JSON.parse(decodedKey);
+
 
 admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
@@ -119,16 +120,32 @@ async function run() {
         app.get("/", (req, res) => res.send("Backend is running!"));
 
         app.post("/jwt", async (req, res) => {
-            const { email } = req.body;
-            const user = await usersCollection.findOne({ email });
-            if (!user) return res.status(403).json({ message: "User not found" });
+            try {
+                const { email } = req.body;
 
-            const token = jwt.sign({ email, role: user.role }, process.env.JWT_SECRET, {
-                expiresIn: "1h",
-            });
 
-            res.json({ token });
+                if (!email) return res.status(400).json({ message: "Email missing" });
+
+                const user = await usersCollection.findOne({ email });
+
+
+                if (!user) return res.status(403).json({ message: "User not found" });
+
+                if (!process.env.JWT_SECRET) {
+                    throw new Error("JWT_SECRET missing in env");
+                }
+
+                const token = jwt.sign({ email, role: user.role }, process.env.JWT_SECRET, {
+                    expiresIn: "1h",
+                });
+
+                res.json({ token });
+            } catch (err) {
+                console.error("JWT generation error:", err);
+                res.status(500).json({ message: "Internal Server Error" });
+            }
         });
+
 
         app.post("/users", async (req, res) => {
             try {
@@ -190,14 +207,14 @@ async function run() {
                 const { aboutMe } = req.body;
                 const email = req.user?.email?.toLowerCase();
 
-                console.log('email:', email);
+
 
                 const result = await usersCollection.findOneAndUpdate(
                     { email },
                     { $set: { aboutMe } },
                     { returnDocument: "after" }
                 );
-                console.log("res value: ", result);
+
                 if (!result) return res.status(404).json({ error: "User not found" });
 
                 res.json({ aboutMe: result.aboutMe });
@@ -359,9 +376,7 @@ async function run() {
                 // Use email as identifier
                 const userEmail = req.user?.email?.toLowerCase();
 
-                console.log("User email:", userEmail);
-                console.log("postId:", postId);
-                console.log("vote type:", type);
+
 
                 if (!userEmail) {
                     return res.status(401).json({ error: "User email not found" });
@@ -826,34 +841,29 @@ async function run() {
         // GET user info by email
         // Get user profile and their recent posts
         app.get("/users/profile", verifyToken, verifyUser, async (req, res) => {
-            console.log("=== PROFILE ROUTE DEBUG START ===");
+
 
             try {
                 const email = req.query.email;
-                console.log("1. Requested email:", email);
-                console.log("2. User from token:", req.user?.email);
+
 
                 if (!email) {
-                    console.log("❌ No email provided");
+
                     return res.status(400).json({ message: "Email is required" });
                 }
 
-                // Check if collections are defined
-                console.log("3. Checking collections...");
-                console.log("   - usersCollection exists:", !!usersCollection);
-                console.log("   - postsCollection exists:", !!postsCollection);
 
                 if (!usersCollection) {
-                    console.log("❌ usersCollection is undefined");
+
                     return res.status(500).json({ message: "Database connection error" });
                 }
 
-                console.log("4. Searching for user in database...");
+
                 const user = await usersCollection.findOne({
                     email: email.toLowerCase()
                 });
 
-                console.log("5. User query result:", user ? "Found" : "Not found");
+
                 if (user) {
                     console.log("   User details:", {
                         _id: user._id,
@@ -864,24 +874,24 @@ async function run() {
                 }
 
                 if (!user) {
-                    console.log("❌ User not found for email:", email);
+
                     return res.status(404).json({ message: "User not found" });
                 }
 
-                console.log("6. Searching for user posts...");
+
                 const posts = await postsCollection
                     .find({ authorEmail: email.toLowerCase() })
                     .sort({ creation_time: -1 })
                     .limit(3)
                     .toArray();
 
-                console.log("7. Posts found:", posts.length);
+
 
                 const totalPosts = await postsCollection.countDocuments({
                     authorEmail: email.toLowerCase()
                 });
 
-                console.log("8. Total posts count:", totalPosts);
+
 
                 const response = {
                     ...user,
@@ -889,17 +899,15 @@ async function run() {
                     totalPostCount: totalPosts
                 };
 
-                console.log("9. ✅ Sending successful response");
-                console.log("=== PROFILE ROUTE DEBUG END ===");
 
                 return res.json(response);
 
             } catch (err) {
-                console.log("=== PROFILE ROUTE ERROR ===");
+
                 console.error("❌ Error type:", err.constructor.name);
                 console.error("❌ Error message:", err.message);
                 console.error("❌ Error stack:", err.stack);
-                console.log("================================");
+
 
                 return res.status(500).json({
                     message: "Server error",
@@ -910,13 +918,13 @@ async function run() {
         });
 
         app.get("/users/role/:email", verifyToken, async (req, res) => {
-            console.log("=== ROLE ROUTE DEBUG ===");
+
             try {
                 const { email } = req.params;
-                console.log("Fetching role for:", email);
+
 
                 if (!usersCollection) {
-                    console.log("❌ usersCollection is undefined in role route");
+
                     return res.status(500).json({ message: "Database connection error" });
                 }
 
@@ -925,11 +933,11 @@ async function run() {
                 });
 
                 if (!user) {
-                    console.log("❌ User not found for role fetch:", email);
+
                     return res.status(404).json({ message: "User not found" });
                 }
 
-                console.log("✅ User role found:", user.role);
+
                 res.json({ role: user.role });
 
             } catch (error) {

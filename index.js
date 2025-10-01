@@ -191,15 +191,40 @@ async function run() {
         });
 
         // GET /users
+        // app.get("/users", async (req, res) => {
+        //     try {
+        //         const allUsers = await usersCollection.find({}).toArray();
+        //         res.json({ success: true, data: allUsers });
+        //     } catch (err) {
+        //         console.error(err);
+        //         res.status(500).json({ success: false, message: "Server error" });
+        //     }
+        // });
+
         app.get("/users", async (req, res) => {
             try {
-                const allUsers = await usersCollection.find({}).toArray();
-                res.json({ success: true, data: allUsers });
+                const { email } = req.query;
+
+                let users;
+                if (email) {
+                    // Fetch single user by email
+                    const user = await usersCollection.findOne({ email });
+                    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+                    users = [user]; // wrap in array for consistency
+                } else {
+                    // Fetch all users
+                    users = await usersCollection.find({}).toArray();
+                }
+
+                res.json({ success: true, data: users });
             } catch (err) {
                 console.error(err);
                 res.status(500).json({ success: false, message: "Server error" });
             }
         });
+
+
+
 
         // PUT /users/aboutme
         app.put("/users/aboutme", verifyToken, verifyUser, async (req, res) => {

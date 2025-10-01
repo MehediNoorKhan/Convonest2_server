@@ -99,7 +99,7 @@ async function run() {
 
         // ------------------- Routes -------------------
 
-        // Health check
+
         app.get("/", (req, res) => res.send("Backend is running!"));
 
         // ------------------- JWT -------------------
@@ -158,25 +158,25 @@ async function run() {
         });
 
         // Get users (all or by email)
-        app.get("/users", async (req, res) => {
-            try {
-                const { email } = req.query;
-                let users;
+        // app.get("/users", async (req, res) => {
+        //     try {
+        //         const { email } = req.query;
+        //         let users;
 
-                if (email) {
-                    const user = await usersCollection.findOne({ email });
-                    if (!user) return res.status(404).json({ success: false, message: "User not found" });
-                    users = [user];
-                } else {
-                    users = await usersCollection.find({}).toArray();
-                }
+        //         if (email) {
+        //             const user = await usersCollection.findOne({ email });
+        //             if (!user) return res.status(404).json({ success: false, message: "User not found" });
+        //             users = [user];
+        //         } else {
+        //             users = await usersCollection.find({}).toArray();
+        //         }
 
-                res.json({ success: true, data: users });
-            } catch (err) {
-                console.error(err);
-                res.status(500).json({ success: false, message: "Server error" });
-            }
-        });
+        //         res.json({ success: true, data: users });
+        //     } catch (err) {
+        //         console.error(err);
+        //         res.status(500).json({ success: false, message: "Server error" });
+        //     }
+        // });
 
         // Update user's About Me
         app.put("/users/aboutme", verifyToken, verifyUser, async (req, res) => {

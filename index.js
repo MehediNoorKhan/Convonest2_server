@@ -510,7 +510,7 @@ async function run() {
             }
         });
 
-        app.get("/posts/:id", verifyToken, async (req, res) => {
+        app.get("/posts/:id", async (req, res) => {
             try {
                 const { id } = req.params;
                 const post = await postsCollection.findOne({ _id: new ObjectId(id) });
@@ -637,16 +637,14 @@ async function run() {
         });
 
         // GET /reports - Get all reports (admin only - you can add admin check middleware)
-        app.get("/reports", verifyToken, verifyAdmin, async (req, res) => {
+        // For normal users
+        app.get("/reports", verifyToken, verifyUser, async (req, res) => {
             try {
-                const { status, page = 1, limit = 10 } = req.query;
+                const { page = 1, limit = 10 } = req.query;
                 const pageNumber = parseInt(page);
                 const pageSize = parseInt(limit);
 
-                let query = {};
-                if (status) {
-                    query.status = status;
-                }
+                const query = { reportedBy: req.user.email }; // Only their reports
 
                 const totalReports = await db.collection("reports").countDocuments(query);
                 const reports = await db.collection("reports")
@@ -664,13 +662,14 @@ async function run() {
                     currentPage: pageNumber
                 });
             } catch (error) {
-                console.error("Error fetching reports:", error);
+                console.error("Error fetching user reports:", error);
                 res.status(500).json({
                     success: false,
-                    message: "Failed to fetch reports"
+                    message: "Failed to fetch your reports"
                 });
             }
         });
+
 
         // PUT /reports/:reportId/status - Update report status (admin only)
         app.put("/reports/:reportId/status", verifyToken, verifyAdmin, async (req, res) => {
@@ -941,34 +940,28 @@ async function run() {
             }
         });
 
+        // Get user role by email
+
         app.get("/users/role/:email", verifyToken, async (req, res) => {
-
             try {
-                const { email } = req.params;
-
-
-                if (!usersCollection) {
-
-                    return res.status(500).json({ message: "Database connection error" });
+                const email = req.params.email;
+                if (!email) {
+                    return res.status(400).send({ success: false, message: "Email is required" });
                 }
 
-                const user = await usersCollection.findOne({
-                    email: email.toLowerCase()
-                });
-
-                if (!user) {
-
-                    return res.status(404).json({ message: "User not found" });
+                const user = await usersCollection.findOne({ email: email });
+                if (user) {
+                    return res.send({ success: true, role: user.role });
+                } else {
+                    return res.status(404).send({ success: false, message: "User not found" });
                 }
-
-
-                res.json({ role: user.role });
-
             } catch (error) {
-                console.error(" Role route error:", error);
-                res.status(500).json({ message: "Server error", error: error.message });
+                console.error("Error fetching user role:", error);
+                res.status(500).send({ success: false, message: "Server error" });
             }
         });
+
+
 
         // GET /myposts/:email - Fetch posts for the specified user email
         app.get("/myposts/:email", verifyToken, verifyUser, async (req, res) => {

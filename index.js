@@ -670,6 +670,52 @@ async function run() {
             }
         });
 
+        // GET /reportsforadmin - Admin only
+        app.get("/reportsforadmin", verifyToken, verifyAdmin, async (req, res) => {
+            try {
+                const { page = 1, limit = 10, status = "pending" } = req.query;
+                const pageNumber = parseInt(page);
+                const pageSize = parseInt(limit);
+
+                const query = { status }; // filter by status
+
+                const totalReports = await db.collection("reports").countDocuments(query);
+                const reports = await db.collection("reports")
+                    .find(query)
+                    .sort({ reportedAt: -1 })
+                    .skip((pageNumber - 1) * pageSize)
+                    .limit(pageSize)
+                    .toArray();
+
+                // Populate each report with comment data
+                const reportsWithComments = await Promise.all(
+                    reports.map(async (report) => {
+                        const comment = await commentsCollection.findOne({ _id: new ObjectId(report.commentId) });
+                        return {
+                            ...report,
+                            comment: comment?.comment || "N/A",
+                            commenterName: comment?.commenterName || "Unknown",
+                        };
+                    })
+                );
+
+                res.json({
+                    success: true,
+                    data: reportsWithComments,
+                    totalReports,
+                    totalPages: Math.ceil(totalReports / pageSize),
+                    currentPage: pageNumber
+                });
+            } catch (error) {
+                console.error("Error fetching reports for admin:", error);
+                res.status(500).json({
+                    success: false,
+                    message: "Failed to fetch reports for admin"
+                });
+            }
+        });
+
+
 
         // PUT /reports/:reportId/status - Update report status (admin only)
         app.put("/reports/:reportId/status", verifyToken, verifyAdmin, async (req, res) => {

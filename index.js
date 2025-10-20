@@ -988,6 +988,24 @@ async function run() {
 
         // Get user role by email
 
+        // app.get("/users/role/:email", verifyToken, async (req, res) => {
+        //     try {
+        //         const email = req.params.email;
+        //         if (!email) {
+        //             return res.status(400).send({ success: false, message: "Email is required" });
+        //         }
+
+        //         const user = await usersCollection.findOne({ email: email });
+        //         if (user) {
+        //             return res.send({ success: true, role: user.role });
+        //         } else {
+        //             return res.status(404).send({ success: false, message: "User not found" });
+        //         }
+        //     } catch (error) {
+        //         console.error("Error fetching user role:", error);
+        //         res.status(500).send({ success: false, message: "Server error" });
+        //     }
+        // });
         app.get("/users/role/:email", verifyToken, async (req, res) => {
             try {
                 const email = req.params.email;
@@ -997,7 +1015,12 @@ async function run() {
 
                 const user = await usersCollection.findOne({ email: email });
                 if (user) {
-                    return res.send({ success: true, role: user.role });
+                    return res.send({
+                        success: true,
+                        role: user.role,
+                        user_status: user.user_status || "Bronze",
+                        membership: user.membership || "no",
+                    });
                 } else {
                     return res.status(404).send({ success: false, message: "User not found" });
                 }
@@ -1144,7 +1167,7 @@ async function run() {
         });
 
         // ✅ Create Payment Intent
-        app.post("/create-payment-intent", verifyToken, async (req, res) => {
+        app.post("/create-payment-intent", async (req, res) => {
             try {
                 const { amount } = req.body;
 
@@ -1161,7 +1184,7 @@ async function run() {
         });
 
         // ✅ Store payment result
-        app.post("/save-payment", verifyToken, async (req, res) => {
+        app.post("/save-payment", async (req, res) => {
             try {
                 const { email, amount, transactionId, cardType, cardOwner } = req.body;
 

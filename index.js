@@ -1,1288 +1,586 @@
-import dotenv from "dotenv";
-dotenv.config();
-
-import express from "express";
-import Stripe from "stripe";
-import jwt from "jsonwebtoken";
-import cors from "cors";
-import admin from "firebase-admin";
-import { MongoClient, ServerApiVersion, ObjectId } from "mongodb";
-
-const app = express();
-const port = process.env.PORT || 5000;
-
-
-
-app.use(cors());
-app.use(express.json());
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
+const admin = require("firebase-admin");
+const { messaging } = require('firebase-admin');
+const Stripe = require("stripe");
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 
-const decodedKey = Buffer.from(process.env.FB_SERVICE_KEY, 'base64').toString('utf8');
-const serviceAccount = JSON.parse(decodedKey);
 
+const app = express();
+const port = process.env.PORT;
+
+// Middleware
+const corsOptions = {
+    origin: [
+        "http://localhost:5173",
+        "https://convonest3.web.app"
+    ],
+    credentials: true, // allow cookies and auth headers
+};
+
+app.use(cors(corsOptions));
+
+app.use(express.json());
+
+const serviceAccount = require("./serviceAccountKey.json");
 
 admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
+    credential: admin.credential.cert(serviceAccount)
 });
 
-async function verifyToken(req, res, next) {
+// MongoDB setup
+const uri = process.env.MONGODB_URI;
+const client = new MongoClient(uri);
+let usersCollection, tagsCollection, postsCollection, commentsCollection, reportsCollection, announcementsCollection, paymentsCollection;
+
+const verifyToken = async (req, res, next) => {
     const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-        return res.status(401).json({ message: "Unauthorized" });
+
+    if (!authHeader) {
+        return res.status(401).send({ message: "Unauthorized Access" });
     }
 
     const token = authHeader.split(" ")[1];
-    try {
-        const decodedToken = await admin.auth().verifyIdToken(token);
-        req.user = decodedToken; // contains user's UID, email, etc.
-        next();
-    } catch (err) {
-        console.error("Token verification failed:", err);
-        return res.status(401).json({ message: "Invalid token" });
-    }
-}
 
-// Middleware to check if user is admin
-async function verifyAdmin(req, res, next) {
+    if (!token) {
+        return res.status(401).send({ message: "Unauthorized Access" });
+    }
+
     try {
-        if (!req.user?.email) {
-            return res.status(401).json({ message: "Unauthorized: No user email found" });
+        const decoded = await admin.auth().verifyIdToken(token);
+        req.decoded = decoded;
+        next();
+    } catch (error) {
+        return res.status(403).send({ message: "Forbidden Access" });
+    }
+};
+
+const verifyAdmin = async (req, res, next) => {
+    try {
+        const { db } = await connectDB();
+        const user = await db
+            .collection("users")
+            .findOne({ email: req.decoded.email.toLowerCase() });
+
+        if (!user || user.role !== "admin") {
+            return res.status(403).send({ message: "Admin Access Only" });
         }
 
-        const email = req.user.email.toLowerCase();
-        // fetch user from DB
-        const user = await usersCollection.findOne({ email });
+        next();
+    } catch (error) {
+        return res.status(500).send({ message: "Server Error" });
+    }
+};
+
+const verifyUser = async (req, res, next) => {
+    try {
+        const { db } = await connectDB();
+        const user = await db
+            .collection("users")
+            .findOne({ email: req.decoded.email.toLowerCase() });
 
         if (!user) {
-            return res.status(404).json({ message: "User not found" });
-        }
-
-        if (user.role !== "admin") {
-            return res.status(403).json({ message: "Forbidden: Admins only" });
-        }
-
-        // ✅ user is admin
-        next();
-    } catch (err) {
-        console.error("verifyAdmin error:", err);
-        return res.status(500).json({ message: "Server error", error: err.message });
-    }
-}
-
-async function verifyUser(req, res, next) {
-    try {
-        if (!req.user?.email) {
-            return res.status(401).json({ message: "Unauthorized: No user email found" });
-        }
-
-        const email = req.user.email;
-        const user = await usersCollection.findOne({ email });
-
-        if (!user) {
-            return res.status(404).json({ message: "User not found" });
-        }
-
-        if (user.role !== "user") {
-            return res.status(403).json({ message: "Forbidden: Only users can access this route" });
+            return res.status(404).send({ message: "User Not Found" });
         }
 
         next();
-    } catch (err) {
-        console.error("verifyUser error:", err);
-        res.status(500).json({ message: "Server error", error: err.message });
+    } catch (error) {
+        return res.status(500).send({ message: "Server Error" });
     }
-}
+};
 
-const uri = process.env.MONGO_URI;
-const client = new MongoClient(uri, {
-    serverApi: {
-        version: ServerApiVersion.v1,
-        strict: true,
-        deprecationErrors: true,
-        tls: true
-    },
-});
 
-let usersCollection, tagsCollection, postsCollection, commentsCollection, announcementsCollection, paymentsCollection;
-
+// Connect to MongoDB
 async function run() {
     try {
+        // await client.connect();
+        // await client.db("admin").command({ ping: 1 });
+        console.log("Connected to MongoDB");
 
-        const db = client.db("myforum");
-        usersCollection = db.collection("users");
+        const db = client.db('myforum');
+        usersCollection = db.collection('users');
         tagsCollection = db.collection("tags");
         postsCollection = db.collection("posts");
         commentsCollection = db.collection("comments");
+        reportsCollection = db.collection("reports");
         announcementsCollection = db.collection("announcements");
         paymentsCollection = db.collection("payments");
 
-        app.get("/", (req, res) => res.send("Backend is running!"));
 
-        app.post("/jwt", async (req, res) => {
-            try {
-                const { email } = req.body;
-
-
-                if (!email) return res.status(400).json({ message: "Email missing" });
-
-                const user = await usersCollection.findOne({ email });
-
-
-                if (!user) return res.status(403).json({ message: "User not found" });
-
-                if (!process.env.JWT_SECRET) {
-                    throw new Error("JWT_SECRET missing in env");
-                }
-
-                const token = jwt.sign({ email, role: user.role }, process.env.JWT_SECRET, {
-                    expiresIn: "1h",
-                });
-
-                res.json({ token });
-            } catch (err) {
-                console.error("JWT generation error:", err);
-                res.status(500).json({ message: "Internal Server Error" });
-            }
-        });
-
-
+        // --------users---------  
         app.post("/users", async (req, res) => {
-            try {
-                const userData = req.body;
+            const { db } = await connectDB();
+            const usersCollection = db.collection("users");
+            const { email, fullName, avatar, role = "user", user_status = "Bronze", membership = "no", posts = 0 } = req.body;
 
-                // Check if user already exists
-                const existingUser = await usersCollection.findOne({ email: userData.email });
+            const result = await usersCollection.updateOne(
+                { email: email.toLowerCase() },
+                {
+                    $setOnInsert: { email: email.toLowerCase(), role, user_status, membership, posts, createdAt: new Date() },
+                    $set: { fullName, avatar, updatedAt: new Date() }
+                },
+                { upsert: true }
+            );
 
-                if (existingUser) {
-                    // ✅ Update avatar or other fields if changed (e.g., from Google login)
-                    const updatedUser = {
-                        $set: {
-                            fullName: userData.fullName || existingUser.fullName,
-                            avatar: userData.avatar || existingUser.avatar,
-                            user_status: existingUser.user_status || "Bronze",
-                            membership: existingUser.membership || "no",
-                            posts: existingUser.posts || 0,
-                            role: existingUser.role || "user",
-                        },
-                    };
-
-                    await usersCollection.updateOne({ email: userData.email }, updatedUser);
-
-                    return res.status(200).json({ message: "User already existed, updated successfully" });
-                }
-
-                // ✅ Insert new user if not exists
-                const newUser = {
-                    ...userData,
-                    role: userData.role || "user",
-                    user_status: userData.user_status || "Bronze",
-                    membership: userData.membership || "no",
-                    posts: userData.posts || 0,
-                };
-
-                const result = await usersCollection.insertOne(newUser);
-                res.status(201).json({ message: "User registered successfully", userId: result.insertedId });
-
-            } catch (error) {
-                console.error("User insert error:", error);
-                res.status(500).json({ message: "Internal server error" });
-            }
+            res.json({ success: true, upserted: result.upsertedCount > 0 });
         });
-
-        // GET /users
-        // app.get("/users", async (req, res) => {
-        //     try {
-        //         const allUsers = await usersCollection.find({}).toArray();
-        //         res.json({ success: true, data: allUsers });
-        //     } catch (err) {
-        //         console.error(err);
-        //         res.status(500).json({ success: false, message: "Server error" });
-        //     }
-        // });
 
         app.get("/users", async (req, res) => {
-            try {
-                const { email } = req.query;
+            const { db } = await connectDB();
+            const { email } = req.query;
 
-                let users;
-                if (email) {
-                    // Fetch single user by email
-                    const user = await usersCollection.findOne({ email });
-                    if (!user) return res.status(404).json({ success: false, message: "User not found" });
-                    users = [user]; // wrap in array for consistency
-                } else {
-                    // Fetch all users
-                    users = await usersCollection.find({}).toArray();
-                }
-
-                res.json({ success: true, data: users });
-            } catch (err) {
-                console.error(err);
-                res.status(500).json({ success: false, message: "Server error" });
+            if (email) {
+                const user = await db.collection("users").findOne({ email: email.toLowerCase() });
+                return user ? res.json({ success: true, data: [user] }) : res.status(404).json({ error: "User not found" });
             }
+
+            const users = await db.collection("users").find().toArray();
+            res.json({ success: true, data: users });
         });
 
-
-
-
-        // PUT /users/aboutme
-        app.put("/users/aboutme", verifyToken, verifyUser, async (req, res) => {
-            try {
-                const { aboutMe } = req.body;
-                const email = req.user?.email?.toLowerCase();
-
-
-
-                const result = await usersCollection.findOneAndUpdate(
-                    { email },
-                    { $set: { aboutMe } },
-                    { returnDocument: "after" }
-                );
-
-                if (!result) return res.status(404).json({ error: "User not found" });
-
-                res.json({ aboutMe: result.aboutMe });
-            } catch (err) {
-                console.error("Update About Me error:", err);
-                res.status(500).json({ error: "Failed to update About Me" });
-            }
+        app.get("/users/role/:email", verifyToken, async (req, res) => {
+            const { db } = await connectDB();
+            const user = await db.collection("users").findOne({ email: req.params.email.toLowerCase() });
+            user ? res.json({ success: true, role: user.role, user_status: user.user_status || "Bronze", membership: user.membership || "no" })
+                : res.status(404).json({ error: "User not found" });
         });
 
-        // GET /users/home-stats?email=user@example.com
+        app.get("/users/profile", verifyToken, verifyUser, async (req, res) => {
+            const { db } = await connectDB();
+            const email = req.query.email?.toLowerCase();
+            if (!email) return res.status(400).json({ error: "Email required" });
+
+            const user = await db.collection("users").findOne({ email });
+            if (!user) return res.status(404).json({ error: "User not found" });
+
+            const posts = await db.collection("posts").find({ authorEmail: email }).sort({ creation_time: -1 }).limit(3).toArray();
+            const totalPosts = await db.collection("posts").countDocuments({ authorEmail: email });
+
+            res.json({ ...user, recentPosts: posts, totalPostCount: totalPosts });
+        });
+
         app.get("/users/home-stats", verifyToken, verifyUser, async (req, res) => {
-            try {
-                const email = req.query.email?.toLowerCase();
-                if (!email) return res.status(400).json({ error: "Email required" });
+            const { db } = await connectDB();
+            const email = req.query.email?.toLowerCase();
+            if (!email) return res.status(400).json({ error: "Email required" });
 
-                // Use aggregation to calculate stats in one query
-                const result = await postsCollection.aggregate([
-                    { $match: { authorEmail: email } },
-                    {
-                        $group: {
-                            _id: null,
-                            postsCount: { $sum: 1 },
-                            totalVotes: {
-                                $sum: {
-                                    $add: [
-                                        { $ifNull: ["$upVote", 0] },
-                                        { $ifNull: ["$downVote", 0] }
-                                    ]
-                                }
-                            },
-                            commentsCount: {
-                                $sum: {
-                                    $cond: [
-                                        { $isArray: "$comments" },
-                                        { $size: "$comments" },
-                                        0
-                                    ]
-                                }
-                            }
-                        }
+            const result = await db.collection("posts").aggregate([
+                { $match: { authorEmail: email } },
+                {
+                    $group: {
+                        _id: null,
+                        postsCount: { $sum: 1 },
+                        totalVotes: { $sum: { $add: [{ $ifNull: ["$upVote", 0] }, { $ifNull: ["$downVote", 0] }] } },
+                        commentsCount: { $sum: { $cond: [{ $isArray: "$comments" }, { $size: "$comments" }, 0] } }
                     }
-                ]).toArray();
-
-                if (result.length === 0) {
-                    return res.json({ posts: 0, comments: 0, votes: 0 });
                 }
+            ]).toArray();
 
-                res.json({
-                    posts: result[0].postsCount,
-                    comments: result[0].commentsCount,
-                    votes: result[0].totalVotes
-                });
-            } catch (err) {
-                console.error("Failed to fetch user home stats:", err);
-                res.status(500).json({ error: "Failed to fetch stats" });
-            }
+            result.length === 0 ? res.json({ posts: 0, comments: 0, votes: 0 })
+                : res.json({ posts: result[0].postsCount, comments: result[0].commentsCount, votes: result[0].totalVotes });
         });
 
-        // PATCH /users/make-admin/:id
+        app.put("/users/aboutme", verifyToken, verifyUser, async (req, res) => {
+            const { db } = await connectDB();
+            const { aboutMe } = req.body;
+            const result = await db.collection("users").findOneAndUpdate(
+                { email: req.decoded.email.toLowerCase() },
+                { $set: { aboutMe } },
+                { returnDocument: "after" }
+            );
+            result ? res.json({ aboutMe: result.aboutMe }) : res.status(404).json({ error: "User not found" });
+        });
+
         app.patch("/users/make-admin/:id", verifyToken, verifyAdmin, async (req, res) => {
-            const { id } = req.params;
-            if (!ObjectId.isValid(id)) return res.status(400).json({ success: false, message: "Invalid user ID" });
+            const { db } = await connectDB();
+            if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid ID" });
 
-            try {
-                const result = await usersCollection.updateOne(
-                    { _id: new ObjectId(id) },
-                    { $set: { role: "admin" } }
-                );
-
-                if (result.modifiedCount === 0) return res.status(404).json({ success: false, message: "User not found" });
-
-                res.json({ success: true, message: "User role updated" });
-            } catch (err) {
-                console.error(err);
-                res.status(500).json({ success: false, message: "Server error" });
-            }
+            const result = await db.collection("users").updateOne(
+                { _id: new ObjectId(req.params.id) },
+                { $set: { role: "admin" } }
+            );
+            result.modifiedCount === 0 ? res.status(404).json({ error: "User not found" }) : res.json({ success: true });
         });
 
-        const tags = ["fix", "solve", "bug", "code", "problem", "quick", "crash", "stack", "beautiful", "efficient", "confusing", "branch", "live"];
-        const existingTags = await tagsCollection.countDocuments();
-        if (existingTags === 0) await tagsCollection.insertMany(tags.map(t => ({ name: t })));
 
+        // --- Tags ---
         app.get("/tags", async (req, res) => {
-            const allTags = await tagsCollection.find().toArray();
-            res.json(allTags);
+            const { db } = await connectDB();
+            const tags = await db.collection("tags").find().toArray();
+            res.json(tags);
         });
 
+        app.post("/addtags", verifyToken, async (req, res) => {
+            const { db } = await connectDB();
+            const { tag } = req.body;
+            if (!tag) return res.status(400).json({ error: "Tag required" });
+
+            const existing = await db.collection("tags").findOne({ name: tag });
+            if (existing) return res.status(400).json({ error: "Tag already exists" });
+
+            const result = await db.collection("tags").insertOne({ name: tag });
+            res.json({ success: true, insertedId: result.insertedId });
+        });
+
+        // --- Posts ---
         app.post("/posts", verifyToken, verifyUser, async (req, res) => {
-            try {
-                const post = req.body;
-                const authorEmail = post.authorEmail?.toLowerCase();
+            const { db } = await connectDB();
+            const post = { ...req.body, authorEmail: req.body.authorEmail.toLowerCase(), createdAt: new Date() };
+            const result = await db.collection("posts").insertOne(post);
 
-                if (!authorEmail) {
-                    return res.status(400).json({ message: "Author email is required" });
-                }
-
-                // Insert the post
-                const result = await postsCollection.insertOne(post);
-
-                if (result.insertedId) {
-                    // Increment the user's post count
-                    await usersCollection.updateOne(
-                        { email: authorEmail },
-                        { $inc: { posts: 1 } }
-                    );
-                }
-
-                res.status(201).json({
-                    message: "Post added successfully",
-                    postId: result.insertedId
-                });
-            } catch (err) {
-                console.error("Failed to add post:", err);
-                res.status(500).json({ message: "Failed to add post" });
+            if (result.insertedId) {
+                await db.collection("users").updateOne({ email: post.authorEmail }, { $inc: { posts: 1 } });
             }
+
+            res.status(201).json({ success: true, insertedId: result.insertedId });
         });
 
         app.get("/posts", async (req, res) => {
-            try {
-                const { sort, page = 1, limit = 5 } = req.query;
-                const pageNumber = parseInt(page);
-                const pageSize = parseInt(limit);
+            const { db } = await connectDB();
+            const { sort, page = 1, limit = 5 } = req.query;
+            const pageNumber = parseInt(page);
+            const pageSize = parseInt(limit);
 
-                let cursor = postsCollection.find();
+            let cursor = db.collection("posts").find();
+            cursor = sort === "popularity" ? cursor.sort({ vote: -1 }) : cursor.sort({ creation_time: -1 });
 
-                // Sorting
-                cursor = sort === "popularity" ? cursor.sort({ vote: -1 }) : cursor.sort({ creation_time: -1 });
+            const totalPosts = await db.collection("posts").countDocuments();
+            const posts = await cursor.skip((pageNumber - 1) * pageSize).limit(pageSize).toArray();
 
-                const totalPosts = await postsCollection.countDocuments();
-                const posts = await cursor.skip((pageNumber - 1) * pageSize).limit(pageSize).toArray();
+            const sanitizedPosts = posts.map(p => ({
+                ...p,
+                upVote: p.upVote || 0,
+                downVote: p.downVote || 0,
+                comments: p.comments || [],
+                upvote_by: p.upvote_by || [],
+                downvote_by: p.downvote_by || []
+            }));
 
-                // Make sure these fields exist for frontend
-                const sanitizedPosts = posts.map(p => ({
-                    ...p,
-                    upVote: p.upVote || 0,
-                    downVote: p.downVote || 0,
-                    comments: p.comments || [],
-                    upvote_by: p.upvote_by || [],
-                    downvote_by: p.downvote_by || []
-                }));
-
-                res.json({
-                    totalPosts,
-                    totalPages: Math.ceil(totalPosts / pageSize),
-                    currentPage: pageNumber,
-                    posts: sanitizedPosts
-                });
-            } catch (err) {
-                console.error(err);
-                res.status(500).json({ message: "Failed to fetch posts" });
-            }
-        });
-
-        app.post("/posts/:postId/vote", verifyToken, async (req, res) => {
-            try {
-                const { postId } = req.params;
-                const { type } = req.body;
-
-                // Use email as identifier
-                const userEmail = req.user?.email?.toLowerCase();
-
-
-
-                if (!userEmail) {
-                    return res.status(401).json({ error: "User email not found" });
-                }
-
-                if (!['upvote', 'downvote'].includes(type)) {
-                    return res.status(400).json({ error: "Invalid vote type" });
-                }
-
-                const post = await postsCollection.findOne({ _id: new ObjectId(postId) });
-
-                if (!post) {
-                    return res.status(404).json({ error: "Post not found" });
-                }
-
-                let upvote_by = post.upvote_by || [];
-                let downvote_by = post.downvote_by || [];
-                let upVote = post.upVote || 0;
-                let downVote = post.downVote || 0;
-
-                const hasUpvoted = upvote_by.includes(userEmail);
-                const hasDownvoted = downvote_by.includes(userEmail);
-
-                if (type === 'upvote') {
-                    if (hasUpvoted) {
-                        upvote_by = upvote_by.filter(email => email !== userEmail);
-                        upVote = Math.max(0, upVote - 1);
-                    } else {
-                        upvote_by.push(userEmail);
-                        upVote += 1;
-
-                        if (hasDownvoted) {
-                            downvote_by = downvote_by.filter(email => email !== userEmail);
-                            downVote = Math.max(0, downVote - 1);
-                        }
-                    }
-                } else if (type === 'downvote') {
-                    if (hasDownvoted) {
-                        downvote_by = downvote_by.filter(email => email !== userEmail);
-                        downVote = Math.max(0, downVote - 1);
-                    } else {
-                        downvote_by.push(userEmail);
-                        downVote += 1;
-
-                        if (hasUpvoted) {
-                            upvote_by = upvote_by.filter(email => email !== userEmail);
-                            upVote = Math.max(0, upVote - 1);
-                        }
-                    }
-                }
-
-                const vote = upVote - downVote;
-
-                const result = await postsCollection.findOneAndUpdate(
-                    { _id: new ObjectId(postId) },
-                    {
-                        $set: {
-                            upVote,
-                            downVote,
-                            vote,
-                            upvote_by,
-                            downvote_by
-                        }
-                    },
-                    { returnDocument: "after" }
-                );
-
-                if (!result) {
-                    return res.status(404).json({ error: "Failed to update post" });
-                }
-
-                res.json({
-                    upVote,
-                    downVote,
-                    vote,
-                    upvote_by,
-                    downvote_by
-                });
-            } catch (err) {
-                console.error("Vote error:", err);
-                res.status(500).json({ error: "Failed to process vote", details: err.message });
-            }
-        });
-
-        // Search posts by tag
-        app.post("/posts/search", async (req, res) => {
-            try {
-                const { tag } = req.body;
-                if (!tag || !tag.trim()) {
-                    return res.json({ posts: [] });
-                }
-
-                const db = client.db("myforum");
-                const collection = db.collection("posts");
-                const trimmedTag = tag.trim();
-
-                // Search posts where the tag matches (case-insensitive)
-                const posts = await collection
-                    .find({ tag: { $regex: trimmedTag, $options: "i" } })
-                    .toArray();
-
-                res.json({ posts });
-            } catch (err) {
-                console.error("Search error:", err);
-                res.status(500).json({ message: "Failed to search posts" });
-            }
+            res.json({ totalPosts, totalPages: Math.ceil(totalPosts / pageSize), currentPage: pageNumber, posts: sanitizedPosts });
         });
 
         app.get("/posts/:id", async (req, res) => {
-            try {
-                const { id } = req.params;
-                const post = await postsCollection.findOne({ _id: new ObjectId(id) });
-                if (!post) return res.status(404).json({ message: "Post not found" });
-                res.json(post);
-            } catch (err) {
-                res.status(500).json({ message: "Failed to fetch post" });
-            }
+            const { db } = await connectDB();
+            if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid ID" });
+
+            const post = await db.collection("posts").findOne({ _id: new ObjectId(req.params.id) });
+            post ? res.json(post) : res.status(404).json({ error: "Post not found" });
         });
 
-        // 🔹 DELETE /posts/:id
+        app.get("/myposts/:email", verifyToken, verifyUser, async (req, res) => {
+            const { db } = await connectDB();
+            const { email } = req.params;
+
+            if (email.toLowerCase() !== req.decoded.email.toLowerCase()) {
+                return res.status(403).json({ error: "Access denied" });
+            }
+
+            const posts = await db.collection("posts").find({ authorEmail: email.toLowerCase() }).sort({ creation_time: -1 }).toArray();
+            res.json({ success: true, data: posts, count: posts.length });
+        });
+
+        app.post("/posts/search", async (req, res) => {
+            const { db } = await connectDB();
+            const { tag } = req.body;
+            if (!tag?.trim()) return res.json({ posts: [] });
+
+            const posts = await db.collection("posts").find({ tag: { $regex: tag.trim(), $options: "i" } }).toArray();
+            res.json({ posts });
+        });
+
         app.delete("/posts/:id", verifyToken, async (req, res) => {
-            const { id } = req.params;
-            if (!ObjectId.isValid(id)) {
-                return res.status(400).json({ success: false, message: "Invalid post ID" });
-            }
+            const { db } = await connectDB();
+            if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid ID" });
 
-            try {
-                const result = await postsCollection.deleteOne({ _id: new ObjectId(id) });
-                if (result.deletedCount === 0) {
-                    return res.status(404).json({ success: false, message: "Post not found" });
-                }
-
-                res.json({ success: true, message: "Post deleted successfully" });
-            } catch (err) {
-                console.error("Error deleting post:", err);
-                res.status(500).json({ success: false, message: "Server error" });
-            }
+            const result = await db.collection("posts").deleteOne({ _id: new ObjectId(req.params.id) });
+            result.deletedCount === 0 ? res.status(404).json({ error: "Post not found" }) : res.json({ success: true });
         });
 
-        // Add these routes to your existing index.js file
-
-        // POST /comments/:commentId/report - Report a comment
-        app.post("/comments/:commentId/report", verifyToken, verifyUser, async (req, res) => {
-            try {
-                const { commentId } = req.params;
-                const { feedback, postId } = req.body;
-                const reporterEmail = req.user.email;
-
-                if (!feedback || !postId) {
-                    return res.status(400).json({
-                        success: false,
-                        message: "Feedback and postId are required"
-                    });
-                }
-
-                // Create reports collection reference
-                const db = client.db("myforum");
-                const reportsCollection = db.collection("reports");
-
-                // Check if user has already reported this comment
-                const existingReport = await reportsCollection.findOne({
-                    commentId,
-                    reporterEmail
-                });
-
-                if (existingReport) {
-                    return res.status(400).json({
-                        success: false,
-                        message: "You have already reported this comment"
-                    });
-                }
-
-                // Create new report
-                const newReport = {
-                    commentId,
-                    postId,
-                    reporterEmail,
-                    feedback,
-                    reportedAt: new Date(),
-                    status: "pending"
-                };
-
-                await reportsCollection.insertOne(newReport);
-
-                // Update comment to mark it as reported
-                await postsCollection.updateOne(
-                    { _id: new ObjectId(postId), "comments._id": new ObjectId(commentId) },
-                    {
-                        $inc: { "comments.$.reportCount": 1 },
-                        $addToSet: { "comments.$.reportedBy": reporterEmail }
-                    }
-                );
-
-                res.json({
-                    success: true,
-                    message: "Comment reported successfully",
-                    reportId: newReport._id
-                });
-            } catch (error) {
-                console.error("Error reporting comment:", error);
-                res.status(500).json({
-                    success: false,
-                    message: "Failed to report comment"
-                });
-            }
-        });
-
-        app.get("/comments/:commentId/report-status", verifyToken, async (req, res) => {
-            try {
-                const { commentId } = req.params;
-                const userEmail = req.user.email;
-
-                const db = client.db("myforum");
-                const reportsCollection = db.collection("reports");
-
-                const report = await reportsCollection.findOne({
-                    commentId,
-                    reporterEmail: userEmail
-                });
-
-                res.json({
-                    success: true,
-                    hasReported: !!report,
-                    reportedAt: report ? report.reportedAt : null
-                });
-            } catch (error) {
-                console.error("Error checking report status:", error);
-                res.status(500).json({
-                    success: false,
-                    message: "Failed to check report status"
-                });
-            }
-        });
-
-        // GET /reports - Get all reports (admin only - you can add admin check middleware)
-        // For normal users
-        app.get("/reports", verifyToken, verifyUser, async (req, res) => {
-            try {
-                const { page = 1, limit = 10 } = req.query;
-                const pageNumber = parseInt(page);
-                const pageSize = parseInt(limit);
-
-                const query = { reportedBy: req.user.email }; // Only their reports
-
-                const totalReports = await db.collection("reports").countDocuments(query);
-                const reports = await db.collection("reports")
-                    .find(query)
-                    .sort({ reportedAt: -1 })
-                    .skip((pageNumber - 1) * pageSize)
-                    .limit(pageSize)
-                    .toArray();
-
-                res.json({
-                    success: true,
-                    data: reports,
-                    totalReports,
-                    totalPages: Math.ceil(totalReports / pageSize),
-                    currentPage: pageNumber
-                });
-            } catch (error) {
-                console.error("Error fetching user reports:", error);
-                res.status(500).json({
-                    success: false,
-                    message: "Failed to fetch your reports"
-                });
-            }
-        });
-
-        // GET /reportsforadmin - Admin only
-        app.get("/reportsforadmin", verifyToken, verifyAdmin, async (req, res) => {
-            try {
-                const { page = 1, limit = 10, status = "pending" } = req.query;
-                const pageNumber = parseInt(page);
-                const pageSize = parseInt(limit);
-
-                const query = { status }; // filter by status
-
-                const totalReports = await db.collection("reports").countDocuments(query);
-                const reports = await db.collection("reports")
-                    .find(query)
-                    .sort({ reportedAt: -1 })
-                    .skip((pageNumber - 1) * pageSize)
-                    .limit(pageSize)
-                    .toArray();
-
-                // Populate each report with comment data
-                const reportsWithComments = await Promise.all(
-                    reports.map(async (report) => {
-                        const comment = await commentsCollection.findOne({ _id: new ObjectId(report.commentId) });
-                        return {
-                            ...report,
-                            comment: comment?.comment || "N/A",
-                            commenterName: comment?.commenterName || "Unknown",
-                        };
-                    })
-                );
-
-                res.json({
-                    success: true,
-                    data: reportsWithComments,
-                    totalReports,
-                    totalPages: Math.ceil(totalReports / pageSize),
-                    currentPage: pageNumber
-                });
-            } catch (error) {
-                console.error("Error fetching reports for admin:", error);
-                res.status(500).json({
-                    success: false,
-                    message: "Failed to fetch reports for admin"
-                });
-            }
-        });
-
-
-
-        // PUT /reports/:reportId/status - Update report status (admin only)
-        app.put("/reports/:reportId/status", verifyToken, verifyAdmin, async (req, res) => {
-            try {
-                const { reportId } = req.params;
-                const { status } = req.body;
-
-                if (!["pending", "reviewed", "resolved"].includes(status)) {
-                    return res.status(400).json({
-                        success: false,
-                        message: "Invalid status. Must be: pending, reviewed, or resolved"
-                    });
-                }
-
-                const result = await db.collection("reports").updateOne(
-                    { _id: new ObjectId(reportId) },
-                    {
-                        $set: {
-                            status,
-                            updatedAt: new Date(),
-                            updatedBy: req.user.email
-                        }
-                    }
-                );
-
-                if (result.matchedCount === 0) {
-                    return res.status(404).json({
-                        success: false,
-                        message: "Report not found"
-                    });
-                }
-
-                res.json({
-                    success: true,
-                    message: "Report status updated successfully"
-                });
-            } catch (error) {
-                console.error("Error updating report status:", error);
-                res.status(500).json({
-                    success: false,
-                    message: "Failed to update report status"
-                });
-            }
-        });
-
-        // Assuming Express + MongoDB + verifyToken middleware
-        app.post("/posts/:id/vote", verifyToken, async (req, res) => {
+        app.post("/posts/:postId/vote", verifyToken, async (req, res) => {
+            const { db } = await connectDB();
+            const { postId } = req.params;
             const { type } = req.body;
-            const { id } = req.params;
-            const email = req.user.email;
+            const userEmail = req.decoded.email.toLowerCase();
 
-            try {
-                const post = await postsCollection.findOne({ _id: new ObjectId(id) });
-                if (!post) return res.status(404).json({ message: "Post not found" });
+            if (!['upvote', 'downvote'].includes(type)) return res.status(400).json({ error: "Invalid vote type" });
 
-                const upvote_by = post.upvote_by || [];
-                const downvote_by = post.downvote_by || [];
+            const post = await db.collection("posts").findOne({ _id: new ObjectId(postId) });
+            if (!post) return res.status(404).json({ error: "Post not found" });
 
-                if (type === "upvote") {
-                    if (!upvote_by.includes(email)) upvote_by.push(email);
-                    const index = downvote_by.indexOf(email);
-                    if (index !== -1) downvote_by.splice(index, 1);
-                } else if (type === "downvote") {
-                    if (!downvote_by.includes(email)) downvote_by.push(email);
-                    const index = upvote_by.indexOf(email);
-                    if (index !== -1) upvote_by.splice(index, 1);
+            let upvote_by = post.upvote_by || [];
+            let downvote_by = post.downvote_by || [];
+            let upVote = post.upVote || 0;
+            let downVote = post.downVote || 0;
+
+            const hasUpvoted = upvote_by.includes(userEmail);
+            const hasDownvoted = downvote_by.includes(userEmail);
+
+            if (type === 'upvote') {
+                if (hasUpvoted) {
+                    upvote_by = upvote_by.filter(email => email !== userEmail);
+                    upVote = Math.max(0, upVote - 1);
+                } else {
+                    upvote_by.push(userEmail);
+                    upVote += 1;
+                    if (hasDownvoted) {
+                        downvote_by = downvote_by.filter(email => email !== userEmail);
+                        downVote = Math.max(0, downVote - 1);
+                    }
                 }
-
-                const updatedPost = await postsCollection.findOneAndUpdate(
-                    { _id: new ObjectId(id) },
-                    {
-                        $set: {
-                            upvote_by,
-                            downvote_by,
-                            upVote: upvote_by.length,
-                            downVote: downvote_by.length,
-                        },
-                    },
-                    { returnDocument: "after" } // ensures updated doc is returned
-                );
-
-                res.status(200).json(updatedPost.value); // <-- return the updated post
-            } catch (err) {
-                console.error(err);
-                res.status(500).json({ message: "Failed to vote" });
+            } else {
+                if (hasDownvoted) {
+                    downvote_by = downvote_by.filter(email => email !== userEmail);
+                    downVote = Math.max(0, downVote - 1);
+                } else {
+                    downvote_by.push(userEmail);
+                    downVote += 1;
+                    if (hasUpvoted) {
+                        upvote_by = upvote_by.filter(email => email !== userEmail);
+                        upVote = Math.max(0, upVote - 1);
+                    }
+                }
             }
+
+            const vote = upVote - downVote;
+            const result = await db.collection("posts").findOneAndUpdate(
+                { _id: new ObjectId(postId) },
+                { $set: { upVote, downVote, vote, upvote_by, downvote_by } },
+                { returnDocument: "after" }
+            );
+
+            result ? res.json({ upVote, downVote, vote, upvote_by, downvote_by }) : res.status(404).json({ error: "Update failed" });
         });
 
-        // POST comment route
+        // --- Comments ---
         app.post("/posts/:id/comment", verifyToken, async (req, res) => {
+            const { db } = await connectDB();
             const { id } = req.params;
-            const { comment } = req.body; // comment text only
-            const userEmail = req.user.email; // verified from Firebase token
+            const { comment } = req.body;
+            const userEmail = req.decoded.email.toLowerCase();
 
-            try {
-                // 1. Get user data from users collection
-                const userData = await usersCollection.findOne({ email: userEmail });
-                if (!userData) return res.status(404).json({ message: "User not found" });
+            const userData = await db.collection("users").findOne({ email: userEmail });
+            if (!userData) return res.status(404).json({ error: "User not found" });
 
-                const newComment = {
-                    postId: id,
-                    postTitle: req.body.postTitle || "",
-                    commenterName: userData.fullName || "Anonymous",
-                    commenterImage: userData.avatar || null,
-                    commenterEmail: userEmail,
-                    comment,
-                    createdAt: new Date(),
-                };
+            const newComment = {
+                postId: id,
+                postTitle: req.body.postTitle || "",
+                commenterName: userData.fullName || "Anonymous",
+                commenterImage: userData.avatar || null,
+                commenterEmail: userEmail,
+                comment,
+                createdAt: new Date(),
+            };
 
-                // 2. Insert into comments collection
-                await commentsCollection.insertOne(newComment);
+            await db.collection("comments").insertOne(newComment);
+            await db.collection("posts").updateOne({ _id: new ObjectId(id) }, { $push: { comments: newComment } });
 
-                // 3. Push into post's comments array
-                await postsCollection.updateOne(
-                    { _id: new ObjectId(id) },
-                    { $push: { comments: newComment } }
-                );
-
-                res.status(201).json(newComment);
-            } catch (err) {
-                console.error("Comment failed:", err);
-                res.status(500).json({ message: "Failed to add comment" });
-            }
+            res.status(201).json(newComment);
         });
 
         app.get("/posts/:id/comments", verifyToken, async (req, res) => {
+            const { db } = await connectDB();
             const { id } = req.params;
-            // Get page and limit from query, default: page 1, limit 5
             const page = parseInt(req.query.page) || 1;
             const limit = parseInt(req.query.limit) || 5;
             const skip = (page - 1) * limit;
 
-            try {
-                const totalComments = await commentsCollection.countDocuments({ postId: id });
-                const comments = await commentsCollection
-                    .find({ postId: id })
-                    .sort({ createdAt: -1 })
-                    .skip(skip)
-                    .limit(limit)
-                    .toArray();
+            const totalComments = await db.collection("comments").countDocuments({ postId: id });
+            const comments = await db.collection("comments").find({ postId: id }).sort({ createdAt: -1 }).skip(skip).limit(limit).toArray();
 
-                res.json({
-                    comments,
-                    totalComments
-                });
-            } catch (err) {
-                res.status(500).json({ message: "Failed to fetch comments" });
-            }
-        });
-
-        // Only authenticated users can add an announcement
-        app.post("/announcements", verifyToken, verifyAdmin, async (req, res) => {
-            try {
-                const { authorName, authorEmail, authorImage, title, description, creation_time } = req.body;
-
-                if (!authorName || !authorEmail || !authorImage || !title || !description)
-                    return res.status(400).json({ message: "All fields are required" });
-
-                const newAnnouncement = {
-                    authorName,
-                    authorEmail,
-                    authorImage,
-                    title,
-                    description,
-                    creation_time: creation_time || new Date()
-                };
-
-                await announcementsCollection.insertOne(newAnnouncement);
-                res.status(201).json(newAnnouncement);
-            } catch (err) {
-                res.status(500).json({ message: "Failed to add announcement" });
-            }
-        });
-
-        app.get("/announcements", async (req, res) => {
-            try {
-                const announcements = await announcementsCollection.find({}).sort({ creation_time: -1 }).toArray();
-                res.json(announcements);
-            } catch (err) {
-                res.status(500).json({ message: "Failed to fetch announcements" });
-            }
-        });
-
-        app.get("/announcements/count", async (req, res) => {
-            try {
-                const count = await announcementsCollection.countDocuments();
-                res.json({ count });
-            } catch (err) {
-                res.status(500).json({ message: "Failed to fetch announcement count" });
-            }
-        });
-
-        // Get user profile and their recent posts by his email
-        app.get("/users/profile", verifyToken, verifyUser, async (req, res) => {
-
-
-            try {
-                const email = req.query.email;
-
-
-                if (!email) {
-
-                    return res.status(400).json({ message: "Email is required" });
-                }
-
-
-                if (!usersCollection) {
-
-                    return res.status(500).json({ message: "Database connection error" });
-                }
-
-
-                const user = await usersCollection.findOne({
-                    email: email.toLowerCase()
-                });
-
-
-                if (user) {
-                    console.log("User details:", {
-                        _id: user._id,
-                        fullName: user.fullName,
-                        email: user.email,
-                        role: user.role
-                    });
-                }
-
-                if (!user) {
-
-                    return res.status(404).json({ message: "User not found" });
-                }
-
-
-                const posts = await postsCollection
-                    .find({ authorEmail: email.toLowerCase() })
-                    .sort({ creation_time: -1 })
-                    .limit(3)
-                    .toArray();
-
-
-
-                const totalPosts = await postsCollection.countDocuments({
-                    authorEmail: email.toLowerCase()
-                });
-
-
-
-                const response = {
-                    ...user,
-                    recentPosts: posts,
-                    totalPostCount: totalPosts
-                };
-
-
-                return res.json(response);
-
-            } catch (err) {
-
-                console.error("❌ Error type:", err.constructor.name);
-                console.error("❌ Error message:", err.message);
-                console.error("❌ Error stack:", err.stack);
-
-
-                return res.status(500).json({
-                    message: "Server error",
-                    error: err.message,
-                    type: err.constructor.name
-                });
-            }
-        });
-
-        // Get user role by email
-
-        // app.get("/users/role/:email", verifyToken, async (req, res) => {
-        //     try {
-        //         const email = req.params.email;
-        //         if (!email) {
-        //             return res.status(400).send({ success: false, message: "Email is required" });
-        //         }
-
-        //         const user = await usersCollection.findOne({ email: email });
-        //         if (user) {
-        //             return res.send({ success: true, role: user.role });
-        //         } else {
-        //             return res.status(404).send({ success: false, message: "User not found" });
-        //         }
-        //     } catch (error) {
-        //         console.error("Error fetching user role:", error);
-        //         res.status(500).send({ success: false, message: "Server error" });
-        //     }
-        // });
-        app.get("/users/role/:email", verifyToken, async (req, res) => {
-            try {
-                const email = req.params.email;
-                if (!email) {
-                    return res.status(400).send({ success: false, message: "Email is required" });
-                }
-
-                const user = await usersCollection.findOne({ email: email });
-                if (user) {
-                    return res.send({
-                        success: true,
-                        role: user.role,
-                        user_status: user.user_status || "Bronze",
-                        membership: user.membership || "no",
-                    });
-                } else {
-                    return res.status(404).send({ success: false, message: "User not found" });
-                }
-            } catch (error) {
-                console.error("Error fetching user role:", error);
-                res.status(500).send({ success: false, message: "Server error" });
-            }
-        });
-
-
-
-        // GET /myposts/:email - Fetch posts for the specified user email
-        app.get("/myposts/:email", verifyToken, verifyUser, async (req, res) => {
-            try {
-                const { email } = req.params;
-                const loggedInUserEmail = req.user.email;
-
-                // Check if user is trying to access their own posts
-                if (email.toLowerCase() !== loggedInUserEmail.toLowerCase()) {
-                    return res.status(403).json({
-                        success: false,
-                        message: 'You can only access your own posts'
-                    });
-                }
-
-                // Fetch posts where authorEmail matches the specified email
-                const posts = await postsCollection
-                    .find({ authorEmail: email.toLowerCase() })
-                    .sort({ creation_time: -1 })
-                    .toArray();
-
-                // Sanitize posts to ensure all fields exist
-                const sanitizedPosts = posts.map(post => ({
-                    ...post,
-                    upVote: post.upVote || 0,
-                    downVote: post.downVote || 0,
-                    comments: post.comments || [],
-                    upvote_by: post.upvote_by || [],
-                    downvote_by: post.downvote_by || []
-                }));
-
-                res.json({
-                    success: true,
-                    data: sanitizedPosts,
-                    count: sanitizedPosts.length,
-                    userEmail: email
-                });
-            } catch (error) {
-                console.error('Error fetching user posts:', error);
-                res.status(500).json({
-                    success: false,
-                    message: 'Failed to fetch posts'
-                });
-            }
+            res.json({ comments, totalComments });
         });
 
         app.get("/comments/:id", verifyToken, async (req, res) => {
-            try {
-                const commentId = req.params.id;
+            const { db } = await connectDB();
+            if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid ID" });
 
-                // Use commentsCollection instead of db.collection("comments")
-                const comment = await commentsCollection.findOne({ _id: new ObjectId(commentId) });
-
-                if (!comment) {
-                    return res.status(404).json({
-                        success: false,
-                        message: "Comment not found"
-                    });
-                }
-
-                res.json({
-                    success: true,
-                    data: comment
-                });
-            } catch (err) {
-                console.error(err);
-                res.status(500).json({
-                    success: false,
-                    message: "Failed to fetch comment"
-                });
-            }
+            const comment = await db.collection("comments").findOne({ _id: new ObjectId(req.params.id) });
+            comment ? res.json({ success: true, data: comment }) : res.status(404).json({ error: "Comment not found" });
         });
 
         app.delete("/comments/:id", verifyToken, verifyAdmin, async (req, res) => {
-            try {
-                const commentId = req.params.id;
+            const { db } = await connectDB();
+            if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid ID" });
 
-                // Find the comment to get postId - use commentsCollection
-                const comment = await commentsCollection.findOne({ _id: new ObjectId(commentId) });
+            const comment = await db.collection("comments").findOne({ _id: new ObjectId(req.params.id) });
+            if (!comment) return res.status(404).json({ error: "Comment not found" });
 
-                if (!comment) {
-                    return res.status(404).json({
-                        success: false,
-                        message: "Comment not found"
-                    });
-                }
+            await db.collection("comments").deleteOne({ _id: new ObjectId(req.params.id) });
+            await db.collection("posts").updateOne({ _id: new ObjectId(comment.postId) }, { $pull: { comments: { _id: new ObjectId(req.params.id) } } });
 
-                // Delete comment from comments collection
-                await commentsCollection.deleteOne({ _id: new ObjectId(commentId) });
+            res.json({ success: true });
+        });
 
-                // Also remove from the post's comments array - use postsCollection
-                await postsCollection.updateOne(
-                    { _id: new ObjectId(comment.postId) },
-                    { $pull: { comments: { _id: new ObjectId(commentId) } } }
-                );
+        // --- Reports ---
+        app.post("/comments/:commentId/report", verifyToken, verifyUser, async (req, res) => {
+            const { db } = await connectDB();
+            const { commentId } = req.params;
+            const { feedback, postId } = req.body;
+            const reporterEmail = req.decoded.email.toLowerCase();
 
-                res.json({
-                    success: true,
-                    message: "Comment deleted successfully"
-                });
-            } catch (err) {
-                console.error(err);
-                res.status(500).json({
-                    success: false,
-                    message: "Failed to delete comment"
-                });
+            if (!feedback || !postId) return res.status(400).json({ error: "Feedback and postId required" });
+
+            const existing = await db.collection("reports").findOne({ commentId, reporterEmail });
+            if (existing) return res.status(400).json({ error: "Already reported" });
+
+            const newReport = { commentId, postId, reporterEmail, feedback, reportedAt: new Date(), status: "pending" };
+            const result = await db.collection("reports").insertOne(newReport);
+
+            await db.collection("posts").updateOne(
+                { _id: new ObjectId(postId), "comments._id": new ObjectId(commentId) },
+                { $inc: { "comments.$.reportCount": 1 }, $addToSet: { "comments.$.reportedBy": reporterEmail } }
+            );
+
+            res.json({ success: true, insertedId: result.insertedId });
+        });
+
+        app.get("/comments/:commentId/report-status", verifyToken, async (req, res) => {
+            const { db } = await connectDB();
+            const report = await db.collection("reports").findOne({ commentId: req.params.commentId, reporterEmail: req.decoded.email.toLowerCase() });
+            res.json({ success: true, hasReported: !!report, reportedAt: report?.reportedAt || null });
+        });
+
+        app.get("/reports", verifyToken, verifyUser, async (req, res) => {
+            const { db } = await connectDB();
+            const { page = 1, limit = 10 } = req.query;
+            const pageNumber = parseInt(page);
+            const pageSize = parseInt(limit);
+
+            const query = { reporterEmail: req.decoded.email.toLowerCase() };
+            const totalReports = await db.collection("reports").countDocuments(query);
+            const reports = await db.collection("reports").find(query).sort({ reportedAt: -1 }).skip((pageNumber - 1) * pageSize).limit(pageSize).toArray();
+
+            res.json({ success: true, data: reports, totalReports, totalPages: Math.ceil(totalReports / pageSize), currentPage: pageNumber });
+        });
+
+        app.get("/reportsforadmin", verifyToken, verifyAdmin, async (req, res) => {
+            const { db } = await connectDB();
+            const { page = 1, limit = 10, status = "pending" } = req.query;
+            const pageNumber = parseInt(page);
+            const pageSize = parseInt(limit);
+
+            const query = { status };
+            const totalReports = await db.collection("reports").countDocuments(query);
+            const reports = await db.collection("reports").find(query).sort({ reportedAt: -1 }).skip((pageNumber - 1) * pageSize).limit(pageSize).toArray();
+
+            res.json({ success: true, data: reports, totalReports, totalPages: Math.ceil(totalReports / pageSize), currentPage: pageNumber });
+        });
+
+        app.put("/reports/:reportId/status", verifyToken, verifyAdmin, async (req, res) => {
+            const { db } = await connectDB();
+            const { status } = req.body;
+
+            if (!["pending", "reviewed", "resolved"].includes(status)) {
+                return res.status(400).json({ error: "Invalid status" });
             }
+
+            const result = await db.collection("reports").updateOne(
+                { _id: new ObjectId(req.params.reportId) },
+                { $set: { status, updatedAt: new Date(), updatedBy: req.decoded.email.toLowerCase() } }
+            );
+
+            result.matchedCount === 0 ? res.status(404).json({ error: "Report not found" }) : res.json({ success: true });
         });
 
         app.delete("/reports/:id", verifyToken, verifyAdmin, async (req, res) => {
-            try {
-                const reportId = req.params.id;
+            const { db } = await connectDB();
+            if (!ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "Invalid ID" });
 
-                const result = await db.collection("reports").deleteOne({ _id: new ObjectId(reportId) });
-
-                if (result.deletedCount === 0) {
-                    return res.status(404).json({
-                        success: false,
-                        message: "Report not found"
-                    });
-                }
-
-                res.json({
-                    success: true,
-                    message: "Report deleted successfully"
-                });
-            } catch (err) {
-                console.error(err);
-                res.status(500).json({
-                    success: false,
-                    message: "Failed to delete report"
-                });
-            }
+            const result = await db.collection("reports").deleteOne({ _id: new ObjectId(req.params.id) });
+            result.deletedCount === 0 ? res.status(404).json({ error: "Report not found" }) : res.json({ success: true });
         });
 
-        // ✅ Create Payment Intent
+        // --- Announcements ---
+        app.post("/announcements", verifyToken, verifyAdmin, async (req, res) => {
+            const { db } = await connectDB();
+            const { authorName, authorEmail, authorImage, title, description } = req.body;
+
+            if (!authorName || !authorEmail || !title || !description) {
+                return res.status(400).json({ error: "Missing required fields" });
+            }
+
+            const announcement = { authorName, authorEmail, authorImage, title, description, creation_time: new Date() };
+            const result = await db.collection("announcements").insertOne(announcement);
+            res.status(201).json({ success: true, insertedId: result.insertedId });
+        });
+
+        app.get("/announcements", async (req, res) => {
+            const { db } = await connectDB();
+            const announcements = await db.collection("announcements").find().sort({ creation_time: -1 }).toArray();
+            res.json(announcements);
+        });
+
+        app.get("/announcements/count", async (req, res) => {
+            const { db } = await connectDB();
+            const count = await db.collection("announcements").countDocuments();
+            res.json({ count });
+        });
+
+        // --- Payments ---
         app.post("/create-payment-intent", async (req, res) => {
-            try {
-                const { amount } = req.body;
-
-                const paymentIntent = await stripe.paymentIntents.create({
-                    amount,
-                    currency: "usd",
-                    payment_method_types: ["card"],
-                });
-
-                res.send({ clientSecret: paymentIntent.client_secret });
-            } catch (error) {
-                res.status(500).json({ message: "Stripe error", error: error.message });
-            }
+            const { amount } = req.body;
+            const paymentIntent = await stripe.paymentIntents.create({
+                amount: Math.round(amount * 100),
+                currency: "usd",
+                automatic_payment_methods: { enabled: true }
+            });
+            res.json({ clientSecret: paymentIntent.client_secret });
         });
 
-        // ✅ Store payment result
         app.post("/save-payment", async (req, res) => {
-            try {
-                const { email, amount, transactionId, cardType, cardOwner } = req.body;
+            const { db } = await connectDB();
+            const { email, amount, transactionId, cardType, cardOwner } = req.body;
 
-                if (!email || !transactionId) {
-                    return res.status(400).json({ message: "Invalid payment data" });
-                }
+            if (!email || !transactionId) return res.status(400).json({ error: "Invalid payment data" });
 
-                // Save transaction
-                const paymentRecord = {
-                    email,
-                    amount,
-                    transactionId,
-                    cardType,
-                    cardOwner,
-                    status: "succeeded",
-                    createdAt: new Date(),
-                };
+            const payment = { email: email.toLowerCase(), amount, transactionId, cardType, cardOwner, status: "succeeded", createdAt: new Date() };
+            await db.collection("payments").insertOne(payment);
 
-                await paymentsCollection.insertOne(paymentRecord);
+            await db.collection("users").updateOne(
+                { email: email.toLowerCase() },
+                { $set: { membership: "yes", user_status: "Gold" } }
+            );
 
-                // Update user to Gold
-                const filter = { email: email.toLowerCase() };
-                const updateDoc = {
-                    $set: {
-                        membership: "yes",
-                        user_status: "Gold",
-                    },
-                };
-                await usersCollection.updateOne(filter, updateDoc);
-
-                res.status(200).json({ message: "User upgraded to Gold & payment saved" });
-            } catch (error) {
-                res.status(500).json({ message: "Failed to save payment", error: error.message });
-            }
+            res.json({ success: true });
         });
 
-        // Get posts count
+        // --- Stats ---
         app.get("/api/posts/count", async (req, res) => {
-            try {
-                const count = await postsCollection.countDocuments();
-                res.json({ count });
-            } catch (err) {
-                console.error(err);
-                res.status(500).json({ error: "Failed to get posts count" });
-            }
+            const { db } = await connectDB();
+            const count = await db.collection("posts").countDocuments();
+            res.json({ count });
         });
 
-        // Get comments count
         app.get("/api/comments/count", async (req, res) => {
-            try {
-                const count = await commentsCollection.countDocuments();
-                res.json({ count });
-            } catch (err) {
-                console.error(err);
-                res.status(500).json({ error: "Failed to get comments count" });
-            }
+            const { db } = await connectDB();
+            const count = await db.collection("comments").countDocuments();
+            res.json({ count });
         });
 
-        // Get users count
         app.get("/api/users/count", async (req, res) => {
-            try {
-                const count = await usersCollection.countDocuments();
-                res.json({ count });
-            } catch (err) {
-                console.error(err);
-                res.status(500).json({ error: "Failed to get users count" });
-            }
-        });
-
-        // ------------------- Add Tag Route -------------------
-
-        app.post("/addtags", verifyToken, async (req, res) => {
-            const { tag } = req.body;
-            if (!tag) return res.status(400).json({ error: "Tag is required" });
-
-            try {
-                const existingTag = await tagsCollection.findOne({ name: tag });
-                if (existingTag) {
-                    return res.status(400).json({ error: "Tag already exists" });
-                }
-
-                const result = await tagsCollection.insertOne({ name: tag });
-                res.json({ message: "Tag added successfully", tagId: result.insertedId });
-            } catch (err) {
-                console.error(err);
-                res.status(500).json({ error: "Failed to add tag" });
-            }
+            const { db } = await connectDB();
+            const count = await db.collection("users").countDocuments();
+            res.json({ count });
         });
 
 
-
-    } catch (err) {
-        console.error("MongoDB connection failed:", err);
+    } catch (error) {
+        console.error("MongoDB connection failed:", error);
+        // process.exit(1); // Exit if Mongo fails
     }
 }
+run();
 
-run().catch(console.dir);
 
+// Default route
+app.get('/', (req, res) => {
+    res.send('Food Zone Server Running properly');
+});
+
+// Start server
 app.listen(port, () => {
     console.log(`Server running on http://localhost:${port}`);
 });
